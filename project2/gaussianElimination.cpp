@@ -1,4 +1,3 @@
-#include "HashTable.hpp"
 #include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
@@ -165,11 +164,15 @@ void generateRandomMatrix(const int matrixSize, vector<vector<double>>*A, vector
 }
 
 int main(int argc, char** argv){
-//    const int matrixSize = atoi(argv[1]);
-//    const int numThread = atoi(argv[2]);
-        const int matrixSize = 100;
-        const int numThread = 8;
-    bool parallel = true;
+   const int matrixSize = atoi(argv[1]);
+   const int numThread = atoi(argv[2]);
+   const int parallel_flag= atoi(argv[3]);
+        // const int matrixSize = 100;
+        // const int numThread = 8;
+   bool parallel;
+   if(parallel_flag == 1 ){
+   		parallel = true;
+   }
     vector<vector<double>>*A = new vector<vector<double>>();
 //    A->push_back({2,1,-1});
 //    A->push_back({-3,-1,2});
