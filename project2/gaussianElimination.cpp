@@ -195,7 +195,7 @@ int main(int argc, char** argv){
         calculateGaussianElimination_Serial();
     }
     gettimeofday(&end, NULL);
-    printf("total elapse time is : %ld\n", ((end.tv_sec * 1000000 + end.tv_usec)- (start.tv_sec * 1000000 + start.tv_usec)));
+    printf("total elapse time is : %ld ms\n", ((end.tv_sec * 1000 + end.tv_usec / 1000)- (start.tv_sec * 1000+ start.tv_usec / 1000)));
     
     //printAugmentedMatrix(A, b);
 
