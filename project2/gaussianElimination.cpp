@@ -8,7 +8,7 @@
 #include <time.h>
 #include <sys/time.h>
 
-pthread_mutex_t lock[3];
+pthread_mutex_t lock;
 
 void printAugmentedMatrix(const std::vector<std::vector<double>>*A, const std::vector<double>*b);
 
@@ -62,13 +62,20 @@ void* eliminationStepParallel(void *args){
     /* gpp->temp1 = k */
     int k = gpp->temp1;
     int i = gpp->temp2;
-    for(int j = k + 1 + gpp->threadIndex; j < gep->n; j += gep->numThread){
-        gep->A->at(i)[j] = gep->A->at(i)[j] - gep->A->at(i)[k] * gep->A->at(k)[j];
+
+
+    for(int i = k+1+gpp->threadIndex; i < gep->n; i+=gep->numThread){
+        /* Elimination Step */
+        for(int j = k+1; j < gep->n; j++){
+            gep->A->at(i)[j] = gep->A->at(i)[j] - gep->A->at(i)[k] * gep->A->at(k)[j];
+        }
+        gep->b->at(i) = gep->b->at(i) - gep->A->at(i)[k] * gep->y->at(k);
+        gep->A->at(i)[k] = 0;
     }
+
     return nullptr;
 }
 
-pthread_barrier_t barrier;
 
 void calculateGaussianElimination_Parallel_InLoop(){
     const int numThread = gep->numThread;
@@ -77,6 +84,8 @@ void calculateGaussianElimination_Parallel_InLoop(){
         gpp[i] = new GaussianParallelParameters();
     }
     
+
+
     for(int k = 0; k < gep->n; k++){
         /* division step */
         pthread_t _thread[numThread];
@@ -87,104 +96,98 @@ void calculateGaussianElimination_Parallel_InLoop(){
                 printf("Error to create thread!\n");
             }
         }
-        for(int thread = 0; thread < numThread; thread ++){
+
+         for(int thread = 0; thread < numThread; thread ++){
             pthread_join(_thread[thread], NULL);
         }
         
         gep->y->at(k) = gep->b->at(k) / gep->A->at(k)[k];
         gep->A->at(k)[k] = 1;
         
-        for(int i = k+1; i < gep->n; i++){
-            /* Elimination Step */
-            for(int thread = 0; thread < numThread; thread ++){
-                gpp[thread]->setParameters(k, i, thread);
-                if(pthread_create(&_thread[thread], NULL, eliminationStepParallel, gpp[thread]) != 0){
+
+        for(int thread = 0; thread < numThread; thread++){
+            gpp[thread]->setParameters(k, 0, thread);
+            if(pthread_create(&_thread[thread], NULL, eliminationStepParallel, gpp[thread]) != 0){
                     printf("Error to create thread!\n");
-                }
             }
-            
-            for(int thread = 0; thread < numThread; thread ++){
-                pthread_join(_thread[thread], NULL);
-            }
-       
-            gep->b->at(i) = gep->b->at(i) - gep->A->at(i)[k] * gep->y->at(k);
-            gep->A->at(i)[k] = 0;
         }
+
+        for(int thread = 0; thread < numThread; thread ++){
+                pthread_join(_thread[thread], NULL);
+        }
+
         
     }
     
     delete [] gpp;
 }
 
+
+bool visit = false;
 void* allStepParallel(void *args){
     /* division step */
     GaussianParallelParameters* gpp = (GaussianParallelParameters*) args;
+    int k = gpp->temp1;
     
-     for(int k = gpp->temp1 + gpp->threadIndex; k < gep->n; k+=gep->numThread){
-        for(int j = k+1; j < gep->n; j++){
-            int re = gep->A->at(k)[j] / gep->A->at(k)[k];
-            /* critical section */
-//            pthread_mutex_lock(&lock[0]);
-            gep->A->at(k)[j] = re;
-//            pthread_mutex_unlock(&lock[0]);
-        }
+    for(int i = k+1+gpp->threadIndex; i < gep->n; i+=gep->numThread){
+            gep->A->at(k)[i] = gep->A->at(k)[i] / gep->A->at(k)[k];
+    }
     
+    /* this part only do one time */  
+    pthread_mutex_lock(&lock);
+    if(!visit){
         gep->y->at(k) = gep->b->at(k) / gep->A->at(k)[k];
         gep->A->at(k)[k] = 1;
-    
-        for(int i = k+1; i < gep->n; i++){
-            /* Elimination Step */
-            for(int j = k+1; j < gep->n; j++){
-                int re = gep->A->at(i)[j] - gep->A->at(i)[k] * gep->A->at(k)[j];
-                /* critical section */
-//                pthread_mutex_lock(&lock[1]);
-                gep->A->at(i)[j] = re;
-//                pthread_mutex_unlock(&lock[1]);
-            }
-            /* critical section */
-            int re = gep->b->at(i) - gep->A->at(i)[k] * gep->y->at(k);
-//            pthread_mutex_lock(&lock[2]);
-            gep->b->at(i) = re;
-            gep->A->at(i)[k] = 0;
-//            pthread_mutex_unlock(&lock[2]);
+        visit = true;
+    }
+    pthread_mutex_unlock(&lock);
+
+    for(int i = k+1+gpp->threadIndex; i < gep->n; i+=gep->numThread){
+        /* Elimination Step */
+        for(int j = k+1; j < gep->n; j++){
+            gep->A->at(i)[j] = gep->A->at(i)[j] - gep->A->at(i)[k] * gep->A->at(k)[j];
         }
-     }
+        gep->b->at(i) = gep->b->at(i) - gep->A->at(i)[k] * gep->y->at(k);
+        gep->A->at(i)[k] = 0;
+    }
     
     return nullptr;
 }
 
-
+/* change pthread input parameter */
 void calculateGaussianElimination_Parallel_OutLoop(){
-    int numThread = gep->numThread;
-    pthread_t _thread[numThread];
+    const int numThread = gep->numThread;
     GaussianParallelParameters** gpp = new GaussianParallelParameters*[numThread];
     for(int i = 0; i < numThread; i++){
         gpp[i] = new GaussianParallelParameters();
     }
     
-    for(int i = 0; i < 3; i++){
-        if (pthread_mutex_init(&lock[i], NULL) != 0)
-        {
-            printf("\n mutex init failed\n");
+    if (pthread_mutex_init(&lock, NULL) != 0)
+    {
+        printf("\n mutex init failed\n");
+    }
+
+    for(int k = 0; k < gep->n; k++){
+        
+        pthread_t _thread[numThread];
+        
+        for(int thread = 0; thread < numThread; thread ++){
+            gpp[thread]->setParameters(k, 0, thread);
+            if(pthread_create(&_thread[thread], NULL, allStepParallel, gpp[thread]) != 0){
+                printf("Error to create thread!\n");
+            }
         }
-    }
-    
-    for(int thread = 0; thread < numThread; thread++){
-        gpp[thread]->setParameters(0, 0, thread);
-        if(pthread_create(&_thread[thread], NULL, allStepParallel, gpp[thread]) != 0){
-            printf("Error to create thread!\n");
+
+        for(int thread = 0; thread < numThread; thread ++){
+            pthread_join(_thread[thread], NULL);
         }
+
+        visit = false;
+        
     }
     
-    for(int thread = 0; thread < numThread; thread ++){
-        pthread_join(_thread[thread], NULL);
-    }
-    
-    /* destory all locks */
-    for(int i = 0 ; i < 3; i++){
-        pthread_mutex_destroy(&lock[i]);
-    }
-    
+    pthread_mutex_destroy(&lock);
+    delete [] gpp;
 }
 
 void calculateGaussianElimination_Parallel(int version){
@@ -195,6 +198,7 @@ void calculateGaussianElimination_Parallel(int version){
     }
 }
 
+
 void calculateGaussianElimination_Serial(){
     
     for(int k = 0; k < gep->n; k++){
@@ -203,6 +207,8 @@ void calculateGaussianElimination_Serial(){
             gep->A->at(k)[j] = gep->A->at(k)[j] / gep->A->at(k)[k];
         }
         
+
+
         gep->y->at(k) = gep->b->at(k) / gep->A->at(k)[k];
         gep->A->at(k)[k] = 1;
         
@@ -217,6 +223,7 @@ void calculateGaussianElimination_Serial(){
         
     }
 }
+
 
 void printAugmentedMatrix(const std::vector<std::vector<double>>*A, const std::vector<double>*b){
     std::cout << "\n*************Print Augmented Matrix*****************\n";
@@ -246,8 +253,8 @@ int main(int argc, char** argv){
 //    const int matrixSize = atoi(argv[1]);
 //    const int numThread = atoi(argv[2]);
 //    const int parallel_flag= atoi(argv[3]);
-     const int matrixSize = 5;
-     const int numThread = 2;
+     const int matrixSize = 1000;
+     const int numThread = 1;
      const int parallel_flag = 1;
     
     bool parallel = false;
@@ -273,7 +280,7 @@ int main(int argc, char** argv){
     gettimeofday(&end, NULL);
     printf("total elapse time is : %ld ms\n", ((end.tv_sec * 1000 + end.tv_usec / 1000)- (start.tv_sec * 1000+ start.tv_usec / 1000)));
     
-    printAugmentedMatrix(A, b);
+    //printAugmentedMatrix(A, b);
     
     delete A;
     delete b;
