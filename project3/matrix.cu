@@ -32,6 +32,19 @@ public:
         }
     }
 
+    Matrix(int row, int col, float* elements, int cuBlasMode){
+    	this->row = row;
+	this->col = col;
+	matrix = new float[row * col];
+	//int count = 0;
+        for(int i = 0 ; i < col; i++){
+            for(int j = 0; j < row; j++){
+	    	 // printf("result= %f\n", *(elements + count++));
+	  	  setValue(j, i, *(elements + i * row + j));
+            }
+        }
+
+    }
 
     ~Matrix(){
        delete matrix;
@@ -94,12 +107,12 @@ private:
     }
     
     float generateRandomNum(){
-        return static_cast <float> (rand());
+        return static_cast <float> (rand() % 10);
     }
 };
 
 
-Matrix* calculateMatrixMultiplication(Matrix a, Matrix b){
+Matrix* calculateMatrixMultiplication(Matrix &a, Matrix &b){
     assert(a.getCol() == b.getRow());
     //initiate new matrix
     Matrix* c = new Matrix(a.getRow(), b.getCol());
@@ -137,7 +150,7 @@ void cudaCompute(float* a, float *b, float *c, const int m, const int n, const i
     //c->setValue(row, col, result);
 }
 
-Matrix* CudacalculateMatrixMultiplication(Matrix a, Matrix b){
+Matrix* CudacalculateMatrixMultiplication(Matrix &a, Matrix &b){
     assert(a.getCol() == b.getRow());
     Matrix* c = new Matrix(a.getRow(), b.getCol());
     
@@ -177,10 +190,9 @@ Matrix* CudacalculateMatrixMultiplication(Matrix a, Matrix b){
 /*
 	cublas version multiplication
 */
-Matrix* cudaBlasCalculateMatrixMultiplication(Matrix a, Matrix b){
+Matrix* cudaBlasCalculateMatrixMultiplication(Matrix &a, Matrix &b){
   
     assert(a.getCol() == b.getRow());
-
     //allocate gpu space
     float* d_a, * d_b, *d_c;
 
@@ -191,23 +203,27 @@ Matrix* cudaBlasCalculateMatrixMultiplication(Matrix a, Matrix b){
     //copy two operation matrix to gpu
     cudaMemcpy(d_a, a.getMatrix(), a.getSize(), cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, b.getMatrix(), b.getSize(), cudaMemcpyHostToDevice);
+    //cublasSetMatrix(a.row, a.col, a.getSize(), a.getMatrix(), a.row, d_a, a.row);
+    //cublasSetMatrix(b.row, b.col, b.getSize(), b.getMatrix(), b.row, d_b, b.row);
 
     cublasHandle_t handle;
     cublasCreate(&handle);
     const float alf = 1.0f;
-    const float beta = 1.0f;
+    const float beta = 0.0f;
     cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, a.row, b.col, a.col, &alf, d_a, a.row, d_b, a.col, &beta, d_c, a.row);
+    //cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_T, b.col, a.row, a.col, &alf, d_a, a.col, d_b, a.row, &beta, d_c, a.col);
+
     float* c = (float*)malloc(a.row * b.col * sizeof(float));
 
     //get the result back
     cudaMemcpy(c, d_c, a.row * b.col * sizeof(float), cudaMemcpyDeviceToHost);
-
+    //cublasGetMatrix(a.row, b.col, a.row * b.col * sizeof(float), d_c, a.row, c, a.row);
     cublasDestroy(handle);
 
-    Matrix* re = new Matrix(a.row, b.col, c);
-  
+    Matrix* re = new Matrix(a.row, b.col, c, 1);
+
     cudaFree(d_c);
-    cudaFree(d_b);
+    cudaFree (d_b);
     cudaFree(d_a);
     free(c);
     
@@ -218,17 +234,21 @@ int main(){
     struct timeval tpstart, tpend;
     long timeuse;
     
-    const int m(1000), n(1000);
-    //Matrix a(m, n);
-    //Matrix b(n, m);
+    const int m(10), k(1), n(10);
+    Matrix a(m, k);
+    Matrix b(k, n);
     
-    float tmp[] = {1, 1, 1, 1};
-    Matrix a(2, 2, tmp);
-    Matrix b(2, 2, tmp);
+    printf("print operation matries\n");
+    //a.printMatrix();
+    //b.printMatrix();
+    //float tmp[] = {1, 1, 1, 1};
+    //Matrix a(2, 2, tmp);
+    //Matrix b(2, 2, tmp);
 
+    
     // run cuda version
     gettimeofday( &tpstart, NULL );		
-    //Matrix* cudaRe = CudacalculateMatrixMultiplication(a,b);
+    Matrix* cudaRe = CudacalculateMatrixMultiplication(a,b);
     gettimeofday (&tpend, NULL);
     timeuse = 1000 * (tpend.tv_sec - tpstart.tv_sec) + (tpend.tv_usec - tpstart.tv_usec) / 1000;
     printf("Cuda finish time %ld ms\n", timeuse);
@@ -236,14 +256,14 @@ int main(){
 
     //run cublas version
     gettimeofday( &tpstart, NULL );
-    //Matrix* cudaBlasRe = cudaBlasCalculateMatrixMultiplication(a,b);
+    Matrix* cudaBlasRe = cudaBlasCalculateMatrixMultiplication(a,b);
     gettimeofday (&tpend, NULL);
     timeuse = 1000 * (tpend.tv_sec - tpstart.tv_sec) + (tpend.tv_usec - tpstart.tv_usec) / 1000;
     printf("Cublas finish time %ld ms\n", timeuse);
-    //cudaBlasRe->printMatrix();
+    cudaBlasRe->printMatrix();
 
-    //float re = Matrix::matrixComparison(cudaRe, cudaBlasRe);
-    //printf("Cudablas version error is %f\n", re);
+    float re = Matrix::matrixComparison(cudaRe, cudaBlasRe);
+    printf("Cuda version error is %f\n", re);
     
     //run cpu version..
     gettimeofday( &tpstart, NULL );
@@ -253,11 +273,12 @@ int main(){
     printf("Cpu finish time %ld ms\n", timeuse);
     cpuRe->printMatrix();
 
-    //re = Matrix::matrixComparison(cpuRe, cudaBlasRe);
-    //printf("cpu version error is %f\n", re);
+    re = Matrix::matrixComparison(cpuRe, cudaBlasRe);
+    printf("cpu version error is %f\n", re);
 
-    //delete cudaBlasRe;
-    //delete cpuRe;
+    delete cudaBlasRe;
+    delete cudaRe;
+    delete cpuRe;
 
     return 0;
 }
