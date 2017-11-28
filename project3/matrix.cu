@@ -186,7 +186,68 @@ void cudaCompute(float* a, float *b, float *c, const int m, const int n, const i
     //c->setValue(row, col, result);
 }
 
-Matrix* CudacalculateMatrixMultiplication(Matrix &a, Matrix &b){
+__global__
+void unrollCudaCompute(float* a, float *b, float *c, const int m, const int n, const int k)
+{
+    float result = 0.f;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    if(row > m or col > k)return;
+    
+    #pragma unroll
+    for(int i = 0; i < k; i ++){
+    	float aVal = *(a + row * k + i);
+	float bVal = *(b + i * n + col);
+        result += aVal * bVal;
+    }
+ 
+    *(c + row * n + col) = result;
+    //c->setValue(row, col, result);
+}
+
+__global__
+void sharedMemoryCudaCompute(float*a, float *b, float *c, const int m, const int n, const int k){
+     //get shared memory
+     __shared__ float ds_A[16][16];
+     __shared__ float ds_B[16][16];
+
+     int bx = blockIdx.x;
+     int by = blockIdx.y;
+     int tx = threadIdx.x;
+     int ty = threadIdx.y;
+     int row = by * 16 + ty;
+     int col = bx * 16 + tx;
+
+     float cVal = 0.f;
+
+     for(int i = 0; i < (k - 1) / 16 + 1; i++){
+     	    if(row < m && i * 16 + tx < n){
+	    	   ds_A[tx][ty] = a[row * n + i * 16 + tx];
+	    }else{
+		ds_A[tx][ty] = 0.f;
+	    }
+
+	    if(i * 16 + ty < n && col < k){
+	    	 ds_B[tx][ty] = b[(i * 16 + ty) * k + col];
+	    }else{
+		ds_B[tx][ty] = 0.f;
+	    }
+
+	    __syncthreads();
+
+	    for(int j = 0; j < 16; j++){
+	    	    cVal += ds_A[j][ty] * ds_B[tx][j];
+	    }
+
+	    __syncthreads();	
+
+	    if(row < m && col < k){
+	    	   c[row * k + col] = cVal;
+	    }
+     }
+}
+
+Matrix* CudacalculateMatrixMultiplication(Matrix &a, Matrix &b, int sharedMemory){
     assert(a.getCol() == b.getRow());
     Matrix* c = new Matrix(a.getRow(), b.getCol());
     
@@ -205,7 +266,17 @@ Matrix* CudacalculateMatrixMultiplication(Matrix &a, Matrix &b){
     dim3 dimGrid((b.getCol() + dimBlock.x - 1) / dimBlock.x, (a.getRow() + dimBlock.y - 1) / dimBlock.y);
  
     //perform cuda calculation
-    cudaCompute<<<dimGrid, dimBlock>>>(d_a, d_b, d_c, a.row, b.col, a.col);
+    if(sharedMemory == 0){
+	 printf("call global memory computation\n");
+	 cudaCompute<<<dimGrid, dimBlock>>>(d_a, d_b, d_c, a.row, b.col, a.col);
+    }else if (sharedMemory == 1){
+	 printf("call shared memory computation\n");
+	sharedMemoryCudaCompute<<<dimGrid, dimBlock>>>(d_a, d_b, d_c, a.row, b.col, a.col);
+    }else if(sharedMemory == 2){
+    	printf("call  unroll computation\n");
+	unrollCudaCompute<<<dimGrid, dimBlock>>>(d_a, d_b, d_c, a.row, b.col, a.col);
+    }
+
     
     //copy data back
     cudaMemcpy(c->getMatrix(), d_c, c->getSize(), cudaMemcpyDeviceToHost);
@@ -293,7 +364,7 @@ int main(){
 
     // run cuda version
     gettimeofday( &tpstart, NULL );		
-    Matrix* cudaRe = CudacalculateMatrixMultiplication(a,b);
+    Matrix* cudaRe = CudacalculateMatrixMultiplication(a,b, 2);
     cudaDeviceSynchronize();
     gettimeofday (&tpend, NULL);
     timeuse = 1000 * (tpend.tv_sec - tpstart.tv_sec) + (tpend.tv_usec - tpstart.tv_usec) / 1000;
